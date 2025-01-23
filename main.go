@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// 1 year ago.
-	to := time.Now().UTC()
+	to := time.Now().UTC().AddDate(0, 0, 1)
 	from := to.AddDate(-1, 0, 0)
 
 	query := `
