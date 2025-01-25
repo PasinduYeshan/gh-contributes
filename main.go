@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// 1 year ago.
-	to := time.Now().UTC().AddDate(0, 0, 1)
+	to := time.Now().UTC().AddDate(0, 0, 0)
 	from := to.AddDate(-1, 0, 0)
 
 	query := `
@@ -108,6 +108,14 @@ func main() {
 	}
 	last5Days := allDays[startIndex:]
 
+	// Print UTC and Local time.
+	localNow := time.Now()
+	utcNow := to.UTC()
+
+	fmt.Println("------------------------------------------")
+	fmt.Println("Local Time: ", localNow.Format("2006-01-02 15:04:05 MST"))
+	fmt.Println("UTC   Time: ", utcNow.Format("2006-01-02 15:04:05 MST"))
+
 	fmt.Println("------------------------------------------")
 	fmt.Println("👋 Your GitHub Contributions (Last 5 days):")
 	for i := len(last5Days) - 1; i >= 0; i-- {
@@ -115,7 +123,7 @@ func main() {
 		fmt.Printf("  %s: contributions: %d\n", d.Date, d.Count)
 	}
 
-	// 5. Print the "full year" stats.
+	// Print the "full year" stats.
 	fmt.Println("------------------------------------------")
 	fmt.Println("👋 Your GitHub Contributions (Last Year):")
 	fmt.Printf(" • Total Commits:              %d\n", cc.TotalCommitContributions)
