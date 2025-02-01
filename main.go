@@ -8,19 +8,17 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 )
 
-// 3. Response struct matching JSON fields.
+// WeekData represents the weekly contribution data.
+type WeekData struct {
+	StartDate string
+	Count     int
+}
+
 type contributionsResponse struct {
 	Viewer struct {
 		ContributionsCollection struct {
-			TotalCommitContributions            int `json:"totalCommitContributions"`
-			TotalPullRequestContributions       int `json:"totalPullRequestContributions"`
-			TotalPullRequestReviewContributions int `json:"totalPullRequestReviewContributions"`
-			TotalIssueContributions             int `json:"totalIssueContributions"`
-			TotalRepositoryContributions        int `json:"totalRepositoryContributions"`
-			RestrictedContributionsCount        int `json:"restrictedContributionsCount"`
-			ContributionCalendar                struct {
-				TotalContributions int `json:"totalContributions"`
-				Weeks              []struct {
+			ContributionCalendar struct {
+				Weeks []struct {
 					ContributionDays []struct {
 						Date              string `json:"date"`
 						ContributionCount int    `json:"contributionCount"`
@@ -37,22 +35,15 @@ func main() {
 		log.Fatalf("Error creating GraphQL client: %v", err)
 	}
 
-	// 1 year ago.
-	to := time.Now().UTC().AddDate(0, 0, 0)
-	from := to.AddDate(-1, 0, 0)
+	// Set the time range to the last 3 months
+	to := time.Now().UTC()
+	from := to.AddDate(0, -3, 0) // 3 months ago
 
 	query := `
     query($from: DateTime!, $to: DateTime!) {
       viewer {
         contributionsCollection(from: $from, to: $to) {
-          totalCommitContributions
-          totalPullRequestContributions
-          totalPullRequestReviewContributions
-          totalIssueContributions
-          totalRepositoryContributions
-          restrictedContributionsCount
           contributionCalendar {
-            totalContributions
             weeks {
               contributionDays {
                 date
@@ -65,7 +56,6 @@ func main() {
     }
     `
 
-	// 4. Make the request with from/to as variables
 	variables := map[string]interface{}{
 		"from": from.Format(time.RFC3339),
 		"to":   to.Format(time.RFC3339),
@@ -77,61 +67,42 @@ func main() {
 		log.Fatalf("GraphQL query failed: %v", err)
 	}
 
-	cc := resp.Viewer.ContributionsCollection
+	cc := resp.Viewer.ContributionsCollection.ContributionCalendar
 
-	// 6. Gather ALL daily contributions from the entire year.
-	type DayData struct {
-		Date  string
-		Count int
-	}
-	var allDays []DayData
-	for _, w := range cc.ContributionCalendar.Weeks {
+	// Aggregate contributions by week
+	var weeklyContributions []WeekData
+	for _, w := range cc.Weeks {
+		weekCount := 0
 		for _, d := range w.ContributionDays {
-			allDays = append(allDays, DayData{
-				Date:  d.Date,
-				Count: d.ContributionCount,
+			weekCount += d.ContributionCount
+		}
+		if len(w.ContributionDays) > 0 {
+			weeklyContributions = append(weeklyContributions, WeekData{
+				StartDate: w.ContributionDays[0].Date,
+				Count:     weekCount,
 			})
 		}
 	}
 
-	// Ensure we have at least 7 days total.
-	totalDays := len(allDays)
-	if totalDays == 0 {
-		fmt.Println("No contributions in the last year!")
-		return
+	renderTerminalGraph(weeklyContributions)
+}
+
+func renderTerminalGraph(weeklyContributions []WeekData) {
+	fmt.Println("GitHub Contributions (Last 3 Months)")
+	fmt.Println("------------------------------------")
+
+	maxCount := 0
+	for _, w := range weeklyContributions {
+		if w.Count > maxCount {
+			maxCount = w.Count
+		}
 	}
 
-	// We'll slice out the last 7 (or fewer if total < 7)
-	startIndex := totalDays - 5
-	if startIndex < 0 {
-		startIndex = 0
+	for _, w := range weeklyContributions {
+		bar := ""
+		for i := 0; i < w.Count; i++ {
+			bar += "█"
+		}
+		fmt.Printf("%s: %3d %s\n", w.StartDate, w.Count, bar)
 	}
-	last5Days := allDays[startIndex:]
-
-	// Print UTC and Local time.
-	localNow := time.Now()
-	utcNow := to.UTC()
-
-	fmt.Println("------------------------------------------")
-	fmt.Println("Local Time: ", localNow.Format("2006-01-02 15:04:05 MST"))
-	fmt.Println("UTC   Time: ", utcNow.Format("2006-01-02 15:04:05 MST"))
-
-	fmt.Println("------------------------------------------")
-	fmt.Println("👋 Your GitHub Contributions (Last 5 days):")
-	for i := len(last5Days) - 1; i >= 0; i-- {
-		d := last5Days[i]
-		fmt.Printf("  %s: contributions: %d\n", d.Date, d.Count)
-	}
-
-	// Print the "full year" stats.
-	fmt.Println("------------------------------------------")
-	fmt.Println("👋 Your GitHub Contributions (Last Year):")
-	fmt.Printf(" • Total Commits:              %d\n", cc.TotalCommitContributions)
-	fmt.Printf(" • Total Pull Requests:        %d\n", cc.TotalPullRequestContributions)
-	fmt.Printf(" • Total Pull Request Reviews: %d\n", cc.TotalPullRequestReviewContributions)
-	fmt.Printf(" • Total Issues:               %d\n", cc.TotalIssueContributions)
-	fmt.Printf(" • Total Repositories:         %d\n", cc.TotalRepositoryContributions)
-	fmt.Printf(" • Private Contributions:      %d\n", cc.RestrictedContributionsCount)
-	fmt.Printf(" • Overall Contributions:      %d\n\n", cc.ContributionCalendar.TotalContributions)
-	fmt.Println("------------------------------------------")
 }
