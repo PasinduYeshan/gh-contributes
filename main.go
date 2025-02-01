@@ -36,9 +36,9 @@ func main() {
 		log.Fatalf("Error creating GraphQL client: %v", err)
 	}
 
-	// Set the time range to the last 3 months.
 	to := time.Now().UTC()
-	from := to.AddDate(0, -3, 0)
+	from := to.AddDate(0, -2, 0)
+	from = startOfWeek(from)
 
 	query := `
     query($from: DateTime!, $to: DateTime!) {
@@ -73,79 +73,135 @@ func main() {
 	var weeklyContributions []WeekData
 	for _, w := range cc.Weeks {
 		weekCount := 0
+		var startDate time.Time
 		for _, d := range w.ContributionDays {
 			weekCount += d.ContributionCount
+			date, err := time.Parse("2006-01-02", d.Date)
+			if err != nil {
+				log.Fatalf("Error parsing date: %v", err)
+			}
+			if startDate.IsZero() || date.Before(startDate) {
+				startDate = date
+			}
 		}
-		if len(w.ContributionDays) > 0 {
+		if !startDate.IsZero() {
+			// Calculate the start of the week (Sunday)
+			startOfWeek := startOfWeek(startDate)
 			weeklyContributions = append(weeklyContributions, WeekData{
-				StartDate: w.ContributionDays[0].Date,
+				StartDate: startOfWeek.Format("2006-01-02"),
 				Count:     weekCount,
 			})
 		}
 	}
 
-	renderTermuiBarChart(weeklyContributions)
-	fmt.Printf("Total weeks: %d\n", len(weeklyContributions))
+	renderTermui(weeklyContributions, cc.Weeks)
 }
 
-func renderTermuiBarChart(weeklyContributions []WeekData) {
+func startOfWeek(date time.Time) time.Time {
+	return date.AddDate(0, 0, -int(date.Weekday()))
+}
+
+func renderTermui(weeklyContributions []WeekData, weeks []struct {
+	ContributionDays []struct {
+		Date              string `json:"date"`
+		ContributionCount int    `json:"contributionCount"`
+	} `json:"contributionDays"`
+}) {
 	if err := ui.Init(); err != nil {
 		log.Fatalf("Failed to initialize termui: %v", err)
 	}
 	defer ui.Close()
 
-	// Create a new bar chart
+	// Bar chart.
 	bc := widgets.NewBarChart()
-	bc.Title = "GitHub Weekly Contributions (Last 3 Months)"
-	bc.BarWidth = 4
-	bc.BarGap = 1
+	bc.Title = "GitHub Weekly Contributions (Last 2 Months)"
+	bc.BarWidth = 6
+	bc.BarGap = 2
 	bc.BarColors = []ui.Color{ui.ColorGreen}
 	bc.LabelStyles = []ui.Style{ui.NewStyle(ui.ColorWhite, ui.ColorClear, ui.ModifierBold)}
 	bc.NumStyles = []ui.Style{ui.NewStyle(ui.ColorBlack, ui.ColorClear, ui.ModifierBold)}
 
-	// Prepare data for the bar chart
 	labels := make([]string, len(weeklyContributions))
 	data := make([]float64, len(weeklyContributions))
-	lastMonth := ""
 
 	for i, w := range weeklyContributions {
 		date, err := time.Parse("2006-01-02", w.StartDate)
 		if err != nil {
-			log.Fatalf("Failed to parse date: %v", err)
-		}
-
-		currentMonth := date.Format("Jan")
-		if currentMonth != lastMonth {
-			labels[i] = currentMonth
-			lastMonth = currentMonth
+			labels[i] = fmt.Sprintf("Week %d", i+1)
 		} else {
-			labels[i] = ""
+			labels[i] = date.Format("01/02")
 		}
-
 		data[i] = float64(w.Count)
-		log.Printf("%s: %d", w.StartDate, float64(w.Count))
 	}
 
 	bc.Data = data
 	bc.Labels = labels
 
-	_, termHeight := ui.TerminalDimensions()
-	bc.SetRect(2, 2, 5*19, termHeight/2)
+	// Stat text.
+	p := widgets.NewParagraph()
+	p.Title = "Last 5 Days Contributions"
+	p.Text = generateLast5DaysText(weeks)
+	p.SetRect(0, 0, 50, 8)
 
-	ui.Render(bc)
+	// Grid.
+	grid := ui.NewGrid()
+	termWidth, termHeight := ui.TerminalDimensions()
+	grid.SetRect(0, 0, termWidth, termHeight)
 
-	// Wait for a key press to exit.
+	grid.Set(
+		ui.NewRow(0.7, bc),
+		ui.NewRow(0.3, p),
+	)
+
+	ui.Render(grid)
+
 	uiEvents := ui.PollEvents()
 	for {
 		e := <-uiEvents
 		switch e.ID {
 		case "q", "<C-c>":
+			// On 'q' or ctrl-c, exit
 			return
 		case "<Resize>":
+			// On resize event, recalc the grid size
 			payload := e.Payload.(ui.Resize)
-			bc.SetRect(0, 0, payload.Width, payload.Height)
+			grid.SetRect(0, 0, payload.Width, payload.Height)
 			ui.Clear()
-			ui.Render(bc)
+			ui.Render(grid)
 		}
 	}
+}
+
+func generateLast5DaysText(weeks []struct {
+	ContributionDays []struct {
+		Date              string `json:"date"`
+		ContributionCount int    `json:"contributionCount"`
+	} `json:"contributionDays"`
+}) string {
+	var allDays []struct {
+		Date              string `json:"date"`
+		ContributionCount int    `json:"contributionCount"`
+	}
+	for _, w := range weeks {
+		allDays = append(allDays, w.ContributionDays...)
+	}
+
+	for i := 0; i < len(allDays); i++ {
+		for j := i + 1; j < len(allDays); j++ {
+			dateI, _ := time.Parse("2006-01-02", allDays[i].Date)
+			dateJ, _ := time.Parse("2006-01-02", allDays[j].Date)
+			if dateI.Before(dateJ) {
+				allDays[i], allDays[j] = allDays[j], allDays[i]
+			}
+		}
+	}
+
+	last5Days := allDays[:5]
+
+	text := "\n"
+	for _, day := range last5Days {
+		text += fmt.Sprintf("  %s: %d\n", day.Date, day.ContributionCount)
+	}
+	text += "\nPress 'q' to quit"
+	return text
 }
